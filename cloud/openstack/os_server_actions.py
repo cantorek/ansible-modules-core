@@ -57,6 +57,22 @@ options:
          changed as the servers API does not provide lock status.
      choices: [stop, start, pause, unpause, lock, unlock, suspend, resume]
      default: present
+   image:
+     description:
+       - Name of the image to use when rebuilding server.
+     required: false
+     version_added: "2.2"
+   rebuild_password:
+     description:
+       - Password to be set after rebuilding the server.
+     required: false
+     version_added: "2.2"
+   preserve_ephemeral:
+     description:
+       - If True, request that any ephemeral device be preserved when rebuilding the instance.
+     required: false
+     default: false
+     version_added: "2.2"
 requirements:
     - "python >= 2.6"
     - "shade"
@@ -78,6 +94,7 @@ EXAMPLES = '''
 _action_map = {'stop': 'SHUTOFF',
                'start': 'ACTIVE',
                'pause': 'PAUSED',
+               'rebuild': 'REBUILD',
                'unpause': 'ACTIVE',
                'lock': 'ACTIVE', # API doesn't show lock/unlock status
                'unlock': 'ACTIVE',
@@ -111,9 +128,12 @@ def _system_state_change(action, status):
 
 def main():
     argument_spec = openstack_full_argument_spec(
-        server=dict(required=True),
-        action=dict(required=True, choices=['stop', 'start', 'pause', 'unpause',
-                                            'lock', 'unlock', 'suspend', 'resume']),
+        server                          = dict(required=True),
+        image                           = dict(required=False),
+        rebuild_password                = dict(required=False, default=None),
+        preserve_ephemeral              = dict(required=False, default=False, type='bool'),
+        action                          = dict(required=True, choices=['stop', 'start', 'pause', 'unpause',
+                                                                        'lock', 'unlock', 'suspend', 'resume', 'rebuild']),
     )
 
     module_kwargs = openstack_module_kwargs()
@@ -153,6 +173,28 @@ def main():
                 module.exit_json(changed=False)
 
             cloud.nova_client.servers.start(server=server.id)
+            if wait:
+                _wait(timeout, cloud, server, action)
+                module.exit_json(changed=True)
+
+        if action == 'rebuild':
+            if not _system_state_change(action, status):
+                module.exit_json(changed=False)
+
+            image = module.params['image']
+            rebuild_password = module.params['rebuild_password']
+            preserve_ephemeral = module.params['preserve_ephemeral']
+
+            if not image:
+                module.fail_json(msg='Image name is required for rebuild.')
+
+            image_id = cloud.get_image_id(module.params['image'])
+
+            if not image_id:
+                module.fail_json(msg='Could not find image %s' % image_id)
+
+            cloud.nova_client.servers.rebuild(server=server.id, image=image_id, password=rebuild_password, preserve_ephemeral=preserve_ephemeral)
+
             if wait:
                 _wait(timeout, cloud, server, action)
                 module.exit_json(changed=True)
